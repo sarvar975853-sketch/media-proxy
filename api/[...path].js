@@ -16,12 +16,23 @@ export default async function handler(request) {
 
   // Strip the "/api/" prefix Vercel routes this function under, and use
   // whatever's left as the filename inside the Internet Archive item.
-  const filePath = url.pathname.replace(/^\/api\//, "");
+  const filePath = url.pathname
+    .replace(/^\/api\//, "")
+    .split("/")
+    .map(encodeURIComponent)
+    .join("/");
   const originURL = `https://archive.org/download/${ARCHIVE_ITEM}/${filePath}`;
 
   const range = request.headers.get("range");
   const originResponse = await fetch(originURL, {
-    headers: range ? { Range: range } : {},
+    headers: {
+      ...(range ? { Range: range } : {}),
+      // Archive.org's edge rejects bare/bot-like requests missing these —
+      // a plain server-side fetch() doesn't send them by default.
+      "User-Agent": "Mozilla/5.0 (compatible; MediaVaultProxy/1.0; +https://vercel.com)",
+      "Accept": "*/*",
+    },
+    redirect: "follow",
   });
 
   const headers = new Headers(originResponse.headers);
@@ -30,6 +41,10 @@ export default async function handler(request) {
   // Cache-Control tells Vercel's edge network to actually cache this response
   // (s-maxage governs the shared/edge cache; max-age governs the visitor's browser)
   headers.set("Cache-Control", "public, max-age=3600, s-maxage=86400");
+
+  if (!originResponse.ok && originResponse.status !== 206) {
+    headers.set("X-Proxy-Attempted-URL", originURL); // shows up in browser dev tools -> Network -> Headers if something fails
+  }
 
   return new Response(originResponse.body, {
     status: originResponse.status,
